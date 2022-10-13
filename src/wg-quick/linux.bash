@@ -224,7 +224,7 @@ add_default() {
 	cmd ip $proto rule add table main suppress_prefixlength 0
 	cmd ip $proto route add "$1" dev "$INTERFACE" table $table
 
-	local marker="-m comment --comment \"wg-quick(8) rule for $INTERFACE\"" restore=$'*raw\n' nftable="wg-quick-$INTERFACE" nftcmd 
+	local marker="-m comment --comment \"wg-quick(8) rule for $INTERFACE\"" restore=$'*raw\n' nftable="wg-quick-$INTERFACE" nftcmd
 	printf -v nftcmd '%sadd table %s %s\n' "$nftcmd" "$pf" "$nftable"
 	printf -v nftcmd '%sadd chain %s %s preraw { type filter hook prerouting priority -300; }\n' "$nftcmd" "$pf" "$nftable"
 	printf -v nftcmd '%sadd chain %s %s premangle { type filter hook prerouting priority -150; }\n' "$nftcmd" "$pf" "$nftable"
@@ -234,10 +234,24 @@ add_default() {
 		printf -v restore '%s-I PREROUTING ! -i %s -d %s -m addrtype ! --src-type LOCAL -j DROP %s\n' "$restore" "$INTERFACE" "${BASH_REMATCH[1]}" "$marker"
 		printf -v nftcmd '%sadd rule %s %s preraw iifname != "%s" %s daddr %s fib saddr type != local drop\n' "$nftcmd" "$pf" "$nftable" "$INTERFACE" "$pf" "${BASH_REMATCH[1]}"
 	done < <(ip -o $proto addr show dev "$INTERFACE" 2>/dev/null)
-	printf -v restore '%sCOMMIT\n*mangle\n-I POSTROUTING -m mark --mark %d -p udp -j CONNMARK --save-mark %s\n-I PREROUTING -p udp -j CONNMARK --restore-mark %s\nCOMMIT\n' "$restore" $table "$marker" "$marker"
-	printf -v nftcmd '%sadd rule %s %s postmangle meta l4proto udp mark %d ct mark set mark \n' "$nftcmd" "$pf" "$nftable" $table
-	printf -v nftcmd '%sadd rule %s %s premangle meta l4proto udp meta mark set ct mark \n' "$nftcmd" "$pf" "$nftable"
+	printf -v restore '%sCOMMIT\n' "$restore"
+
+	# When strict reverse path filtering is enabled, we need to make sure that WireGuard UDP packets
+	# arriving on an external interface would be routed through that same interface with their source
+	# and destination swapped. To do this, we save the fwmark of outgoing WireGuard packets in the
+	# connection tracking module and restore it for incoming packets.
+	# As a convenience, we only check for UDP when setting the connection mark, so that other types of
+	# connections may be exempted from the tunnel using the same mechanism.
+	# Then, we enable src_valid_mark so that the restored fwmark is taken into account for the reverse path lookup.
+	# If the rpfilter netfilter module is used instead, it must be invoked with --validmark in the mangle.PREROUTING chain or later.
+	printf -v restore '%s*mangle\n' "$restore"
+	printf -v restore '%s-I POSTROUTING -m mark --mark %d -p udp -j CONNMARK --save-mark %s\n' "$restore" "$table" "$marker"
+	printf -v restore '%s-I PREROUTING -m connmark --mark %d -j CONNMARK --restore-mark %s\n' "$restore" "$table" "$marker"
+	printf -v restore '%sCOMMIT\n' "$restore"
+	printf -v nftcmd '%sadd rule %s %s postmangle meta l4proto udp mark %d ct mark set mark \n' "$nftcmd" "$pf" "$nftable" "$table"
+	printf -v nftcmd '%sadd rule %s %s premangle ct mark %d meta mark set ct mark \n' "$nftcmd" "$pf" "$nftable" "$table"
 	[[ $proto == -4 ]] && cmd sysctl -q net.ipv4.conf.all.src_valid_mark=1
+
 	if type -p nft >/dev/null; then
 		cmd nft -f <(echo -n "$nftcmd")
 	else

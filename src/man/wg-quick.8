@@ -21,7 +21,7 @@ wg-quick - set up a WireGuard interface simply
 
 .SH DESCRIPTION
 
-This is an extremely simple script for easily bringing up a WireGuard interface,
+This is a simple script for easily bringing up a WireGuard interface,
 suitable for a few common use cases.
 
 Use \fIup\fP to add and set up an interface, and use \fIdown\fP to tear down and remove
@@ -87,7 +87,7 @@ MTU \(em if not specified, the MTU is automatically determined from the endpoint
 or the system default route, which is usually a sane choice. However, to manually specify
 an MTU to override this automatic discovery, this value may be specified explicitly.
 .IP \(bu
-Table \(em Controls the routing table to which routes are added. There are two
+Table \(em controls the routing table to which routes are added. There are two
 special values: `off' disables the creation of routes altogether, and `auto'
 (the default) adds routes to the default table and enables special handling of
 default routes.
@@ -164,6 +164,14 @@ are either not coming out of the tunnel encrypted or not going through the tunne
 that this continues to allow most DHCP traffic through, since most DHCP clients make use of PF_PACKET
 sockets, which bypass Netfilter.) When IPv6 is in use, additional similar lines could be added using
 .BR ip6tables (8).
+
+Another possible use case (Linux only) would be to exempt forwarded traffic from going through the tunnel, so that a machine
+with a 0.0.0.0/0 peer can share its Internet connection (for example, using NAT) in a transparent manner:
+
+    \fBPostUp = iptables -t mangle -I PREROUTING -m addrtype ! --dst-type LOCAL -j CONNMARK --set-mark $(wg show %i fwmark)\fP
+.br
+    \fBPreDown = iptables -t mangle -D PREROUTING -m addrtype ! --dst-type LOCAL -j CONNMARK --set-mark $(wg show %i fwmark)\fP
+.br
 
 Or, perhaps it is desirable to store private keys in encrypted form, such as through use of
 .BR pass (1):
